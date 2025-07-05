@@ -1,55 +1,54 @@
+// sign-fixed.mjs  –  Baby‑JubJub EdDSA with proper BigInt coordinates
 import { buildBabyjub } from 'circomlibjs';
 import { randomBytes, createHash } from 'crypto';
 import { writeFileSync } from 'fs';
 
 const babyJub = await buildBabyjub();
-const F       = babyJub.F;                     // field helper
+const F       = babyJub.F;              // field helper
+const L       = babyJub.subOrder;       // subgroup order
+const G       = babyJub.Base8;          // generator
 
-// ── constants ────────────────────────────────────────────────────────────
-const L  = babyJub.subOrder;                   // subgroup order (≈ 2²⁵⁰)
-const G  = babyJub.Base8;                      // generator inside prime subgroup
-
-// ── helper: hash bytes → uint256 < L ─────────────────────────────────────
-function sha256ToFr(bytes) {
-  const h = createHash('sha256').update(bytes).digest('hex');
-  return (BigInt('0x' + h) & ((1n << 250n) - 1n)) % L;
+/* helper: sha‑256(bytes) → Fr (<L) */
+const mask250 = (1n << 250n) - 1n;
+function sha256ToFr(buf) {
+  const h = createHash('sha256').update(buf).digest();
+  return (BigInt('0x' + h.toString('hex')) & mask250) % L;
 }
+/* helper: (field element | bigint) → bigint */
+const toBig = x => (typeof x === 'bigint') ? x : F.toObject(x);
+/* helper: bigint → 32‑byte Buffer */
+const toBuf = x => Buffer.from(x.toString(16).padStart(64, '0'), 'hex');
 
-// ── 1. keypair (scalar a, public A = a·G) ────────────────────────────────
-const a = BigInt('0x' + randomBytes(32).toString('hex')) % L;
-const A = babyJub.mulPointEscalar(G, a);       // [Ax, Ay]
+/* 1. keypair */
+const a  = BigInt('0x' + randomBytes(32).toString('hex')) % L;
+const A  = babyJub.mulPointEscalar(G, a);      // field objs
+const Ax = toBig(A[0]);
+const Ay = toBig(A[1]);
 
-// ── 2. message & hash ────────────────────────────────────────────────────
-const MSG = 'hello Baby‑JubJub 👋';
+/* 2. message */
+const MSG    = 'hello Baby‑JubJub 👋';
 const mBytes = Buffer.from(MSG, 'utf8');
-const M = sha256ToFr(mBytes);                  // field element
+const M      = sha256ToFr(mBytes);
 
-// ── 3. deterministic nonce r = H(a || m)  (like Ed25519) ─────────────────
-const r = sha256ToFr(Buffer.concat([Buffer.from(a.toString(16).padStart(64,'0'), 'hex'), mBytes]));
-const R = babyJub.mulPointEscalar(G, r);       // [Rx, Ry]
+/* 3. nonce & R */
+const r      = sha256ToFr(Buffer.concat([toBuf(a), mBytes]));
+const R      = babyJub.mulPointEscalar(G, r);
+const Rx     = toBig(R[0]);
+const Ry     = toBig(R[1]);
 
-// ── 4. challenge k = H(R || A || m) ──────────────────────────────────────
-const kInput = Buffer.concat([
-  Buffer.from(R[0].toString(16).padStart(64,'0'), 'hex'),
-  Buffer.from(R[1].toString(16).padStart(64,'0'), 'hex'),
-  Buffer.from(A[0].toString(16).padStart(64,'0'), 'hex'),
-  Buffer.from(A[1].toString(16).padStart(64,'0'), 'hex'),
-  mBytes
-]);
-const k = sha256ToFr(kInput);
+/* 4. challenge k */
+const kInput = Buffer.concat([toBuf(Rx), toBuf(Ry), toBuf(Ax), toBuf(Ay), mBytes]);
+const k      = sha256ToFr(kInput);
 
-// ── 5. signature scalar s = (r + k·a) mod L ──────────────────────────────
-const s = (r + k * a) % L;
+/* 5. signature scalar s */
+const s      = (r + k * a) % L;
 
-// ── 6. write JSON for Remix ──────────────────────────────────────────────
+/* 6. write JSON */
 const out = {
-  message : MSG,
-  Ax : A[0].toString(),
-  Ay : A[1].toString(),
-  Rx : R[0].toString(),
-  Ry : R[1].toString(),
-  s  :  s.toString(),
-  M  :  M.toString()
+  message: MSG,
+  Ax: Ax.toString(),  Ay: Ay.toString(),
+  Rx: Rx.toString(),  Ry: Ry.toString(),
+  s :  s.toString(),  M :  M.toString()
 };
 writeFileSync('signature.json', JSON.stringify(out, null, 2));
-console.log('✅  signature.json created – copy those numbers into Remix!');
+console.log('✅  signature.json written with BigInt coordinates');
